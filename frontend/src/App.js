@@ -22,6 +22,14 @@ function App() {
   const [transcript, setTranscript] = useState('');
   const [analysisResult, setAnalysisResult] = useState(null);
   const [selectedCandidateDetail, setSelectedCandidateDetail] = useState(null);
+  const [questionComments, setQuestionComments] = useState({});
+
+  const updateComment = (questionIndex, comment) => {
+    setQuestionComments(prev => ({
+      ...prev,
+      [questionIndex]: comment
+    }));
+  };
 
   useEffect(() => {
     fetchRoles();
@@ -279,6 +287,7 @@ function App() {
         showMessage(data.error, 'error');
       } else {
         setAnalysisResult(data);
+        setQuestionComments({});
         setActiveTab('results');
         fetchCandidates();
         showMessage('Analys klar!');
@@ -293,7 +302,11 @@ function App() {
 
   const downloadReport = async (candidateId) => {
     try {
-      const res = await fetch(`${API_URL}/report/${candidateId}`);
+      const res = await fetch(`${API_URL}/report/${candidateId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: questionComments })
+      });
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -312,6 +325,7 @@ function App() {
       const res = await fetch(`${API_URL}/candidates/${candidateId}`);
       const data = await res.json();
       setSelectedCandidateDetail(data);
+      setQuestionComments({});
       setActiveTab('results');
     } catch (err) {
       showMessage('Kunde inte hämta kandidatinfo', 'error');
@@ -335,13 +349,14 @@ function App() {
     setAnalysisResult(null);
     setCurrentCandidate(null);
     setAllQuestions([]);
+    setQuestionComments({});
     setActiveTab('role');
   };
 
   return (
     <div className="app">
       <header className="header">
-        <h1>Rekryteringsverktyg</h1>
+        <h1>RekTyrera med AI-stöd</h1>
       </header>
 
       <nav className="nav">
@@ -692,6 +707,19 @@ function App() {
                     {q.quote && (
                       <div className="quote">"{q.quote}"</div>
                     )}
+                    <div className="result-section">
+                      <div className="result-label" style={{ color: '#667eea' }}>Poäng: {q.score}/5</div>
+                    </div>
+                    <div className="result-section" style={{ marginTop: '1rem' }}>
+                      <label className="result-label" style={{ color: '#667eea' }}>Egen reflektion/kommentar:</label>
+                      <textarea
+                        className="form-textarea"
+                        style={{ minHeight: '80px', marginTop: '0.5rem' }}
+                        placeholder="Skriv din egen reflektion eller kommentar här..."
+                        value={questionComments[i] || ''}
+                        onChange={(e) => updateComment(i, e.target.value)}
+                      />
+                    </div>
                   </div>
                 ))}
 

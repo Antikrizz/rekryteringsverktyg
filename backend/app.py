@@ -15,6 +15,10 @@ import io
 import base64
 import tempfile
 
+# Konfigurera ffmpeg för moviepy
+os.environ['IMAGEIO_FFMPEG_EXE'] = 'C:/Users/krist/ffmpeg/ffmpeg-8.0.1-essentials_build/bin/ffmpeg.exe'
+from moviepy import AudioFileClip
+
 # Ladda miljövariabler
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -291,29 +295,52 @@ def prepare_candidate():
 def transcribe_audio():
     if 'file' not in request.files:
         return jsonify({"error": "Ingen ljudfil skickad"}), 400
-
     file = request.files['file']
-
+    MAX_SIZE = 25 * 1024 * 1024
+    tmp_path = None
+    compressed_path = None
     try:
-        # Spara temporärt
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp:
+        original_ext = os.path.splitext(file.filename)[1] or '.mp3'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=original_ext) as tmp:
             file.save(tmp.name)
             tmp_path = tmp.name
-
-        # Transkribera med Whisper
-        with open(tmp_path, 'rb') as audio_file:
-            transcript = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                language="sv"
-            )
-
-        # Ta bort temp-fil
-        os.unlink(tmp_path)
-
+        file_size = os.path.getsize(tmp_path)
+        final_path = tmp_path
+        needs_conversion = file_size > MAX_SIZE or original_ext.lower() in ['.m4a', '.aac', '.ogg', '.webm']
+        if needs_conversion:
+            try:
+                compressed_path = tmp_path + '_compressed.mp3'
+                audio = AudioFileClip(tmp_path)
+                duration = audio.duration
+                if duration > 0:
+                    max_bitrate = int((20 * 1024 * 1024 * 8) / duration)
+                    bitrate = min(max_bitrate, 48000)
+                    bitrate = max(bitrate, 32000)
+                    bitrate_str = f'{bitrate // 1000}k'
+                else:
+                    bitrate_str = '48k'
+                audio.write_audiofile(compressed_path, fps=16000, nbytes=2, codec='libmp3lame', bitrate=bitrate_str, logger=None)
+                audio.close()
+                compressed_size = os.path.getsize(compressed_path)
+                if compressed_size <= MAX_SIZE:
+                    final_path = compressed_path
+                    os.unlink(tmp_path)
+                    tmp_path = None
+                else:
+                    os.unlink(compressed_path)
+                    os.unlink(tmp_path)
+                    return jsonify({"error": f"Filen är för stor ({compressed_size / 1024 / 1024:.1f} MB). Max 25 MB."}), 400
+            except Exception as e:
+                if tmp_path and os.path.exists(tmp_path): os.unlink(tmp_path)
+                if compressed_path and os.path.exists(compressed_path): os.unlink(compressed_path)
+                return jsonify({"error": f"Konverteringsfel: {str(e)}"}), 400
+        with open(final_path, 'rb') as audio_file:
+            transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=audio_file, language="sv")
+        if os.path.exists(final_path): os.unlink(final_path)
         return jsonify({"transcript": transcript.text})
-
     except Exception as e:
+        if tmp_path and os.path.exists(tmp_path): os.unlink(tmp_path)
+        if compressed_path and os.path.exists(compressed_path): os.unlink(compressed_path)
         return jsonify({"error": f"Transkribering misslyckades: {str(e)}"}), 500
 
 @app.route('/api/analyze-interview', methods=['POST'])
@@ -359,8 +386,14 @@ def analyze_interview():
 
 # === RAPPORT ===
 
-@app.route('/api/report/<int:candidate_id>', methods=['GET'])
+@app.route('/api/report/<int:candidate_id>', methods=['GET', 'POST'])
 def generate_report(candidate_id):
+    # Hämta kommentarer från POST-data om det finns
+    comments = {}
+    if request.method == 'POST' and request.is_json:
+        data = request.get_json()
+        comments = data.get('comments', {})
+
     conn = get_db()
     candidate = conn.execute('''
         SELECT c.*, r.name as role_name
@@ -400,11 +433,17 @@ def generate_report(candidate_id):
     for i, q in enumerate(analysis.get('questions', []), 1):
         doc.add_heading(f"Fråga {i}", level=2)
         doc.add_paragraph(q.get('question', ''))
-        doc.add_paragraph(f"Poäng: {q.get('score', 0)}/5")
         doc.add_paragraph(f"Sammanfattning: {q.get('summary', '')}")
-        doc.add_paragraph(f"Bedömning: {q.get('assessment', '')}")
         if q.get('quote'):
             doc.add_paragraph(f'Citat: "{q.get("quote", "")}"')
+        doc.add_paragraph(f"Bedömning: {q.get('assessment', '')}")
+        doc.add_paragraph(f"Poäng: {q.get('score', 0)}/5")
+
+        # Lägg till egen reflektion/kommentar om den finns
+        comment_key = str(i - 1)  # JavaScript använder 0-indexerade nycklar
+        if comment_key in comments and comments[comment_key].strip():
+            doc.add_paragraph(f"Egen reflektion/kommentar: {comments[comment_key]}")
+
         doc.add_paragraph()
 
     # Sammanfattad transkription
