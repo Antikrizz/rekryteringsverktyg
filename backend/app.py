@@ -14,6 +14,7 @@ import PyPDF2
 import io
 import base64
 import tempfile
+from fpdf import FPDF
 
 # Konfigurera ffmpeg för moviepy
 os.environ['IMAGEIO_FFMPEG_EXE'] = 'C:/Users/krist/ffmpeg/ffmpeg-8.0.1-essentials_build/bin/ffmpeg.exe'
@@ -265,6 +266,7 @@ def prepare_candidate():
     role_id = data.get('role_id')
     cv_text = data.get('cv_text', '')
     personal_questions = data.get('personal_questions', [])
+    role_questions_from_request = data.get('role_questions')
 
     conn = get_db()
     role = conn.execute('SELECT * FROM roles WHERE id = ?', (role_id,)).fetchone()
@@ -273,7 +275,11 @@ def prepare_candidate():
         conn.close()
         return jsonify({"error": "Roll hittades inte"}), 404
 
-    role_questions = json.loads(role['questions']) if role['questions'] else []
+    # Använd rollfrågorna från requesten om de skickades, annars från databasen
+    if role_questions_from_request is not None:
+        role_questions = role_questions_from_request
+    else:
+        role_questions = json.loads(role['questions']) if role['questions'] else []
     all_questions = role_questions + personal_questions
 
     cursor = conn.execute(
@@ -388,11 +394,13 @@ def analyze_interview():
 
 @app.route('/api/report/<int:candidate_id>', methods=['GET', 'POST'])
 def generate_report(candidate_id):
-    # Hämta kommentarer från POST-data om det finns
+    # Hämta kommentarer och format från POST-data om det finns
     comments = {}
+    report_format = 'docx'  # Standard är Word
     if request.method == 'POST' and request.is_json:
         data = request.get_json()
         comments = data.get('comments', {})
+        report_format = data.get('format', 'docx')
 
     conn = get_db()
     candidate = conn.execute('''
@@ -409,7 +417,13 @@ def generate_report(candidate_id):
     candidate_dict = dict(candidate)
     analysis = json.loads(candidate_dict['analysis']) if candidate_dict['analysis'] else {}
 
-    # Skapa Word-dokument
+    if report_format == 'pdf':
+        return generate_pdf_report(candidate_dict, analysis, comments)
+    else:
+        return generate_word_report(candidate_dict, analysis, comments)
+
+def generate_word_report(candidate_dict, analysis, comments):
+    """Generera Word-rapport"""
     doc = Document()
 
     # Titel
@@ -439,8 +453,7 @@ def generate_report(candidate_id):
         doc.add_paragraph(f"Bedömning: {q.get('assessment', '')}")
         doc.add_paragraph(f"Poäng: {q.get('score', 0)}/5")
 
-        # Lägg till egen reflektion/kommentar om den finns
-        comment_key = str(i - 1)  # JavaScript använder 0-indexerade nycklar
+        comment_key = str(i - 1)
         if comment_key in comments and comments[comment_key].strip():
             doc.add_paragraph(f"Egen reflektion/kommentar: {comments[comment_key]}")
 
@@ -455,11 +468,105 @@ def generate_report(candidate_id):
     doc.save(doc_bytes)
     doc_bytes.seek(0)
 
-    filename = f"intervjurapport_{candidate_dict.get('name', 'kandidat').replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx"
+    candidate_name = candidate_dict.get('name') or 'kandidat'
+    filename = f"intervjurapport_{candidate_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx"
 
     return send_file(
         doc_bytes,
         mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        as_attachment=True,
+        download_name=filename
+    )
+
+def generate_pdf_report(candidate_dict, analysis, comments):
+    """Generera PDF-rapport"""
+    pdf = FPDF()
+    pdf.add_page()
+
+    # Lägg till Unicode-font för svenska tecken
+    pdf.add_font('DejaVu', '', 'C:/Windows/Fonts/arial.ttf', uni=True)
+    pdf.add_font('DejaVu', 'B', 'C:/Windows/Fonts/arialbd.ttf', uni=True)
+    pdf.set_font('DejaVu', '', 12)
+
+    # Titel
+    pdf.set_font('DejaVu', 'B', 24)
+    pdf.cell(0, 20, 'Intervjurapport', ln=True, align='C')
+    pdf.ln(10)
+
+    # Grundinformation
+    pdf.set_font('DejaVu', 'B', 16)
+    pdf.cell(0, 10, 'Grundinformation', ln=True)
+    pdf.set_font('DejaVu', '', 12)
+    pdf.cell(0, 8, f"Roll: {candidate_dict.get('role_name', 'Ej angiven')}", ln=True)
+    pdf.cell(0, 8, f"Kandidat: {candidate_dict.get('name', 'Ej angiven')}", ln=True)
+    pdf.cell(0, 8, f"Datum: {candidate_dict.get('interview_date', '')[:10] if candidate_dict.get('interview_date') else 'Ej angivet'}", ln=True)
+    pdf.cell(0, 8, f"Totalpoäng: {candidate_dict.get('total_score', 0)}/50", ln=True)
+    pdf.ln(10)
+
+    # Övergripande bedömning
+    pdf.set_font('DejaVu', 'B', 16)
+    pdf.cell(0, 10, 'Övergripande bedömning', ln=True)
+    pdf.set_font('DejaVu', '', 12)
+    pdf.multi_cell(0, 8, analysis.get('overall_assessment', 'Ingen bedömning tillgänglig.'))
+    pdf.ln(10)
+
+    # Frågor och bedömning
+    pdf.set_font('DejaVu', 'B', 16)
+    pdf.cell(0, 10, 'Frågor och bedömning', ln=True)
+
+    for i, q in enumerate(analysis.get('questions', []), 1):
+        pdf.set_font('DejaVu', 'B', 14)
+        pdf.cell(0, 10, f"Fråga {i}", ln=True)
+
+        pdf.set_font('DejaVu', '', 12)
+        pdf.multi_cell(0, 8, q.get('question', ''))
+
+        pdf.set_font('DejaVu', 'B', 12)
+        pdf.cell(0, 8, 'Sammanfattning:', ln=True)
+        pdf.set_font('DejaVu', '', 12)
+        pdf.multi_cell(0, 8, q.get('summary', ''))
+
+        if q.get('quote'):
+            pdf.set_font('DejaVu', '', 11)
+            pdf.set_text_color(100, 100, 100)
+            pdf.multi_cell(0, 8, f'"{q.get("quote", "")}"')
+            pdf.set_text_color(0, 0, 0)
+
+        pdf.set_font('DejaVu', 'B', 12)
+        pdf.cell(0, 8, 'Bedömning:', ln=True)
+        pdf.set_font('DejaVu', '', 12)
+        pdf.multi_cell(0, 8, q.get('assessment', ''))
+
+        pdf.set_font('DejaVu', 'B', 12)
+        pdf.cell(0, 8, f"Poäng: {q.get('score', 0)}/5", ln=True)
+
+        comment_key = str(i - 1)
+        if comment_key in comments and comments[comment_key].strip():
+            pdf.set_font('DejaVu', 'B', 12)
+            pdf.cell(0, 8, 'Egen reflektion/kommentar:', ln=True)
+            pdf.set_font('DejaVu', '', 12)
+            pdf.multi_cell(0, 8, comments[comment_key])
+
+        pdf.ln(5)
+
+    # Sammanfattad transkription
+    pdf.add_page()
+    pdf.set_font('DejaVu', 'B', 16)
+    pdf.cell(0, 10, 'Sammanfattad transkription', ln=True)
+    pdf.set_font('DejaVu', '', 12)
+    pdf.multi_cell(0, 8, analysis.get('summarized_transcript', 'Ingen transkription tillgänglig.'))
+
+    # Spara till bytes
+    pdf_bytes = io.BytesIO()
+    pdf.output(pdf_bytes)
+    pdf_bytes.seek(0)
+
+    candidate_name = candidate_dict.get('name') or 'kandidat'
+    filename = f"intervjurapport_{candidate_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+    return send_file(
+        pdf_bytes,
+        mimetype='application/pdf',
         as_attachment=True,
         download_name=filename
     )

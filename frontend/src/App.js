@@ -107,6 +107,23 @@ function App() {
     setLoading(false);
   };
 
+  const deleteRole = async (e, roleId) => {
+    e.stopPropagation(); // Förhindra att rollen väljs när man klickar X
+    if (!window.confirm('Vill du ta bort denna roll?')) return;
+
+    try {
+      await fetch(`${API_URL}/roles/${roleId}`, { method: 'DELETE' });
+      if (selectedRole?.id === roleId) {
+        setSelectedRole(null);
+        setRoleQuestions([]);
+      }
+      fetchRoles();
+      showMessage('Roll borttagen');
+    } catch (err) {
+      showMessage('Kunde inte ta bort rollen', 'error');
+    }
+  };
+
   const updateRoleQuestions = async () => {
     if (!selectedRole) return;
 
@@ -212,7 +229,8 @@ function App() {
         body: JSON.stringify({
           role_id: selectedRole.id,
           cv_text: cvText,
-          personal_questions: personalQuestions
+          personal_questions: personalQuestions,
+          role_questions: roleQuestions
         })
       });
       const data = await res.json();
@@ -300,18 +318,18 @@ function App() {
 
   // === REPORT ===
 
-  const downloadReport = async (candidateId) => {
+  const downloadReport = async (candidateId, format = 'docx') => {
     try {
       const res = await fetch(`${API_URL}/report/${candidateId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comments: questionComments })
+        body: JSON.stringify({ comments: questionComments, format: format })
       });
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `intervjurapport_${candidateId}.docx`;
+      a.download = `intervjurapport_${candidateId}.${format}`;
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (err) {
@@ -331,6 +349,18 @@ function App() {
       showMessage('Kunde inte hämta kandidatinfo', 'error');
     }
     setLoading(false);
+  };
+
+  const deleteCandidate = async (candidateId, candidateName) => {
+    if (!window.confirm(`Vill du ta bort ${candidateName}?`)) return;
+
+    try {
+      await fetch(`${API_URL}/candidates/${candidateId}`, { method: 'DELETE' });
+      fetchCandidates();
+      showMessage('Kandidat borttagen');
+    } catch (err) {
+      showMessage('Kunde inte ta bort kandidaten', 'error');
+    }
   };
 
   // === RENDER ===
@@ -438,12 +468,19 @@ function App() {
               <div className="card">
                 <h2 className="card-title">Eller välj befintlig roll</h2>
                 <div className="roles-grid">
-                  {roles.map((role) => (
+                  {roles.slice(0, 3).map((role) => (
                     <div
                       key={role.id}
                       className={`role-card ${selectedRole?.id === role.id ? 'selected' : ''}`}
                       onClick={() => selectExistingRole(role)}
                     >
+                      <button
+                        className="role-delete-btn"
+                        onClick={(e) => deleteRole(e, role.id)}
+                        title="Ta bort roll"
+                      >
+                        ×
+                      </button>
                       <div className="role-name">{role.name}</div>
                       <div className="role-description">
                         {role.description?.substring(0, 100) || 'Ingen beskrivning'}
@@ -668,19 +705,26 @@ function App() {
                     <p>{(selectedCandidateDetail?.analysis || analysisResult?.analysis)?.overall_assessment}</p>
                   </div>
 
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => downloadReport(selectedCandidateDetail?.id || currentCandidate?.id)}
-                  >
-                    Ladda ner Word-rapport
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    style={{ marginLeft: '0.5rem' }}
-                    onClick={resetForNewCandidate}
-                  >
-                    Ny kandidat
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => downloadReport(selectedCandidateDetail?.id || currentCandidate?.id, 'docx')}
+                    >
+                      Ladda ner Word
+                    </button>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => downloadReport(selectedCandidateDetail?.id || currentCandidate?.id, 'pdf')}
+                    >
+                      Ladda ner PDF
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={resetForNewCandidate}
+                    >
+                      Ny kandidat
+                    </button>
+                  </div>
                 </div>
 
                 <h3 style={{ margin: '1.5rem 0 1rem' }}>Frågor och bedömning</h3>
@@ -778,9 +822,26 @@ function App() {
                         <button
                           className="btn btn-primary btn-sm"
                           style={{ marginLeft: '0.5rem' }}
-                          onClick={() => downloadReport(c.id)}
+                          onClick={() => downloadReport(c.id, 'docx')}
+                          title="Ladda ner Word"
                         >
-                          Rapport
+                          Word
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          style={{ marginLeft: '0.5rem' }}
+                          onClick={() => downloadReport(c.id, 'pdf')}
+                          title="Ladda ner PDF"
+                        >
+                          PDF
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          style={{ marginLeft: '0.5rem' }}
+                          onClick={() => deleteCandidate(c.id, c.name)}
+                          title="Ta bort kandidat"
+                        >
+                          ×
                         </button>
                       </td>
                     </tr>

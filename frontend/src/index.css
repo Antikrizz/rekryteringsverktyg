@@ -233,6 +233,35 @@ body {
   padding: 1.25rem;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
+}
+
+.role-delete-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: #fee2e2;
+  color: #dc2626;
+  border-radius: 50%;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.role-card:hover .role-delete-btn {
+  opacity: 1;
+}
+
+.role-delete-btn:hover {
+  background: #fecaca;
 }
 
 .role-card:hover {
