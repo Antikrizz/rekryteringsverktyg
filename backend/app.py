@@ -23,7 +23,8 @@ from moviepy import AudioFileClip
 # Ladda miljövariabler
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-app = Flask(__name__)
+FRONTEND_BUILD = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
+app = Flask(__name__, static_folder=FRONTEND_BUILD, static_url_path='')
 CORS(app)
 
 # API-klienter
@@ -746,6 +747,17 @@ VIKTIGT:
             "questions": [{"question": q.get('question', ''), "score": 0, "summary": "Kunde inte analyseras",
                           "assessment": "Tekniskt fel", "quote": ""} for q in questions]
         }
+
+@app.route('/')
+@app.route('/<path:path>')
+def serve_frontend(path=''):
+    """Servera React-appen om build-mappen finns"""
+    if path and os.path.exists(os.path.join(FRONTEND_BUILD, path)):
+        return app.send_static_file(path)
+    index_path = os.path.join(FRONTEND_BUILD, 'index.html')
+    if os.path.exists(index_path):
+        return app.send_static_file('index.html')
+    return jsonify({"message": "Backend körs! Kör 'npm run build' i frontend-mappen för att aktivera webbgränssnittet."}), 200
 
 if __name__ == '__main__':
     print("Startar backend på http://localhost:5000")
